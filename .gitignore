@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local companion state and exports
+badge-ir.sqlite3*
+/profile.json
+*.log
+
+# Local configuration and credentials
+.env*
+secrets.py
+
+# Virtual environments, coverage, and builds
+.venv/
+venv/
+.coverage
+coverage.xml
+htmlcov/
+build/
+dist/
+
+# Editor settings
+.idea/
+.vscode/
