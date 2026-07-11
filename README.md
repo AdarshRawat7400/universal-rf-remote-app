@@ -46,6 +46,18 @@ The factory firmware aliases are used directly:
 - IR receiver: `board.IR_RX` / GPIO21
 - IR transmitter: `board.IR_TX` / GPIO20
 
+## Optional scrollable launcher patch
+
+`extras/menu/__init__.py` is a modified version of the official 2025 badge
+launcher. It makes all discovered app pages reachable when more than six apps
+are installed. It is not required by Universal IR itself.
+
+Use this replacement only with the matching `badger/home` launcher version,
+and back up the badge's original `/system/apps/menu/__init__.py` first. On the
+mounted `BADGER` volume, the runtime path is normally represented by
+`BADGER:/apps/menu/__init__.py`. The upstream file and license are recorded in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
 ## Controls
 
 Controls are shown in the footer on every screen:
@@ -146,6 +158,10 @@ physical badge.
 The PIO pulse reader/sender is derived from the MIT-licensed IR beacon code in
 [`badger/home`](https://github.com/badger/home/tree/main/ir-beacon), copyright
 Christopher Parrott for Pimoroni Ltd.
+
+The optional launcher replacement is derived from the MIT-licensed
+[`badger/home` menu](https://github.com/badger/home/blob/4a3bf0395f79ae386a8d952f7da54281a2f00299/badge/apps/menu/__init__.py),
+copyright Pimoroni & GitHub.
 
 The Samsung TV address/command mapping is cross-checked against the
 CC0-licensed Samsung collection in

@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Derived from badger/home badge/apps/menu/__init__.py at commit
+# 4a3bf0395f79ae386a8d952f7da54281a2f00299. Modified for reliable
+# navigation across every discovered app page. See THIRD_PARTY_NOTICES.md.
+
 import sys
 import os
 
