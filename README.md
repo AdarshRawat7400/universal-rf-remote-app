@@ -37,6 +37,9 @@ profiles to an optional SQLite companion service.
   editors for GitHub identity/token, Weather location, WLED IPv4, and the IR
   companion URL. Sensitive values remain masked and targeted saves preserve
   every unrelated `secrets.py` setting.
+- Built-in WLED discovery and control: select a verified controller from the
+  local network, toggle power, apply color presets or custom RGB values, browse
+  the controller's real effect list, and adjust brightness.
 
 ## Install on the badge
 
@@ -75,7 +78,9 @@ The app has five categories with their own submenus:
 - **Wi-Fi**: status, scan/change network, connect saved, disconnect, and forget.
 - **GitHub**: update the user ID, replace the masked API token, or clear either.
 - **Weather**: set a city/location string or return to automatic IP location.
-- **WLED**: set or clear the direct controller IPv4 address.
+- **WLED**: scan/select a controller, edit or clear its IPv4 address, toggle
+  power, choose preset/custom RGB colors, load supported effects, and adjust
+  brightness.
 - **IR Companion**: set or clear the trusted-LAN companion-service URL.
 
 Wi-Fi scans retain only the strongest 16 bounded results. WPA/WPA2 networks are
@@ -99,6 +104,21 @@ apps reload the new values.
 
 `/secrets.py` is still plaintext on the USB-accessible badge filesystem; this
 app improves safe editing and recovery, not credential-at-rest security.
+
+### WLED discovery and controls
+
+The badge and WLED controller must already be connected to the same local
+network. **Scan & select** listens for native WLED announcements and performs a
+bounded, incremental scan of only the badge's local subnet. Each candidate is
+verified through WLED's `/json/info` endpoint before it can replace the saved
+`WLED_IP`. A full scan usually takes about 30–40 seconds; manual IPv4 entry remains
+available for networks that block device-to-device traffic or discovery.
+
+Color, power, brightness, and effect changes take effect immediately and do not
+require HOME. Effect names and IDs are loaded from the selected controller's
+`/json/eff` endpoint, so reserved/unsupported modes are excluded and the list
+matches that controller's firmware. The implementation uses the official
+[WLED JSON API](https://kno.wled.ge/interfaces/json-api/).
 
 ## Controls
 

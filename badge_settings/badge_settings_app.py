@@ -41,6 +41,20 @@ ROOT_ITEMS = (
     ("IR Companion", "ir"),
 )
 
+WLED_COLOR_PRESETS = (
+    ("White", 255, 255, 255),
+    ("Warm white", 255, 160, 80),
+    ("Red", 255, 0, 0),
+    ("Green", 0, 255, 0),
+    ("Blue", 0, 0, 255),
+    ("Yellow", 255, 255, 0),
+    ("Cyan", 0, 255, 255),
+    ("Magenta", 255, 0, 255),
+    ("Orange", 255, 96, 0),
+    ("Purple", 128, 0, 255),
+    ("Pink", 255, 80, 160),
+)
+
 
 def _short_error(error):
     text = str(error) or error.__class__.__name__
@@ -75,6 +89,13 @@ class BadgeSettingsApp:
     REVIEW = "review"
     CONNECTING = "connecting"
     RESULT = "result"
+    WLED_SCANNING = "wled_scanning"
+    WLED_DEVICES = "wled_devices"
+    WLED_COLORS = "wled_colors"
+    WLED_RGB = "wled_rgb"
+    WLED_EFFECTS = "wled_effects"
+    WLED_BRIGHTNESS = "wled_brightness"
+    WLED_REQUEST = "wled_request"
 
     def __init__(self):
         screen.font = PixelFont.load("/system/assets/fonts/ark.ppf")
@@ -108,6 +129,20 @@ class BadgeSettingsApp:
         self.confirm_action = None
         self.flash_text = ""
         self.flash_until = 0
+        self.wled_module = None
+        self.wled_client = None
+        self.wled_scanner = None
+        self.wled_devices = []
+        self.pending_wled_device = None
+        self.wled_effects = []
+        self.wled_rgb = [255, 255, 255]
+        self.wled_rgb_channel = 0
+        self.wled_brightness = 128
+        self.wled_request_kind = None
+        self.wled_request_args = None
+        self.wled_request_due = 0
+        self.wled_request_title = "WLED"
+        self.wled_request_message = "Working..."
         try:
             self.store.recover()
             self.refresh_values()
@@ -133,6 +168,30 @@ class BadgeSettingsApp:
         if self.wifi is None:
             self.wifi = WiFiManager(network, timeout_ms=20_000, max_results=16)
         return self.wifi
+
+    def ensure_wled(self):
+        if self.wled_module is None:
+            import badge_settings_wled as wled_module
+
+            self.wled_module = wled_module
+        if self.wled_client is None:
+            self.wled_client = self.wled_module.WLEDClient(timeout=1.2)
+        return self.wled_client
+
+    def require_wled_network(self, require_ip=True):
+        try:
+            current = self.ensure_wifi().current()
+        except Exception as error:
+            self.show_details("WLED", [_short_error(error), "Connect Wi-Fi first"])
+            return None
+        if not current.get("connected"):
+            self.show_details("WLED", ["Badge is not on Wi-Fi", "Connect Wi-Fi first"])
+            return None
+        ip_address = self.values.get("WLED_IP")
+        if require_ip and not ip_address:
+            self.show_details("WLED", ["No controller selected", "Use Scan & select"])
+            return None
+        return ip_address or current.get("ip")
 
     def flash(self, text, duration_ms=2200):
         self.flash_text = str(text)[:42]
@@ -188,8 +247,14 @@ class BadgeSettingsApp:
             )
         if self.category == "wled":
             return (
-                ("IP: " + str(self.values.get("WLED_IP") or "Not set"), "wled_status"),
+                ("Controller: " + str(self.values.get("WLED_IP") or "Not set"), "wled_status"),
+                ("Scan & select", "wled_scan"),
                 ("Edit IP", "wled_ip"),
+                ("Power toggle", "wled_power"),
+                ("Color presets", "wled_colors"),
+                ("Custom RGB", "wled_rgb"),
+                ("Effects", "wled_effects"),
+                ("Brightness", "wled_brightness"),
                 ("Clear IP", "clear_wled"),
             )
         return (
@@ -357,6 +422,17 @@ class BadgeSettingsApp:
         elif action == "clear_wled":
             if not self.save_updates({"WLED_IP": None}, "WLED address removed"):
                 return
+        elif action == "save_wled_device":
+            if self.pending_wled_device is None:
+                self.show_details("WLED", ["No controller selected"])
+                return
+            self.begin_wled_request(
+                "save_device",
+                (self.pending_wled_device.get("ip"),),
+                "Verify WLED",
+                "Checking controller",
+            )
+            return
         elif action == "clear_ir":
             if not self.save_updates({"IR_COMPANION_URL": None}, "Companion URL removed"):
                 return
@@ -509,6 +585,235 @@ class BadgeSettingsApp:
         self.pending_password = None
         self.connection_result["message"] = "Connected and saved"
 
+    def begin_wled_request(self, kind, args=(), title="WLED", message="Contacting controller"):
+        self.wled_request_kind = kind
+        self.wled_request_args = tuple(args)
+        self.wled_request_title = title
+        self.wled_request_message = message
+        self.wled_request_due = _ticks_add(io.ticks, 100)
+        self.state = self.WLED_REQUEST
+
+    def clear_wled_request(self):
+        self.wled_request_kind = None
+        self.wled_request_args = None
+
+    def begin_wled_scan(self):
+        if self.require_wled_network(require_ip=False) is None:
+            return
+        self.stop_wled_scan(clear_results=True)
+        try:
+            wlan = self.ensure_wifi().ensure_interface()
+            client = self.ensure_wled()
+            self.wled_scanner = self.wled_module.WLEDScanner(
+                client,
+                wlan,
+                saved_ip=self.values.get("WLED_IP"),
+            )
+            self.wled_scanner.start()
+        except Exception as error:
+            self.wled_scanner = None
+            self.show_details("WLED scan failed", [_short_error(error)])
+            return
+        self.wled_devices = []
+        self.scan_error = None
+        self.state = self.WLED_SCANNING
+        self.reset_list()
+        gc.collect()
+
+    def stop_wled_scan(self, clear_results=False):
+        scanner = self.wled_scanner
+        if scanner is not None:
+            if not clear_results:
+                try:
+                    self.wled_devices = list(scanner.results)
+                except Exception:
+                    self.wled_devices = []
+            try:
+                scanner.close()
+            except Exception:
+                pass
+        self.wled_scanner = None
+        if clear_results:
+            self.wled_devices = []
+        gc.collect()
+
+    def release_wled_runtime(self):
+        self.stop_wled_scan(clear_results=True)
+        if self.wled_client is not None:
+            try:
+                self.wled_client.close()
+            except Exception:
+                pass
+        self.wled_client = None
+        self.wled_effects = []
+        self.pending_wled_device = None
+        self.clear_wled_request()
+        gc.collect()
+
+    def step_wled_scan(self):
+        scanner = self.wled_scanner
+        if scanner is None:
+            self.state = self.WLED_DEVICES
+            self.reset_list()
+            return
+        try:
+            scanner.step()
+            self.wled_devices = scanner.results
+        except Exception as error:
+            self.scan_error = _short_error(error)
+            self.stop_wled_scan(clear_results=False)
+            self.state = self.WLED_DEVICES
+            self.reset_list()
+            return
+        if scanner.done:
+            self.scan_error = scanner.error
+            self.stop_wled_scan(clear_results=False)
+            self.state = self.WLED_DEVICES
+            self.reset_list()
+
+    def choose_wled_device(self):
+        if self.cursor >= len(self.wled_devices):
+            return
+        self.pending_wled_device = dict(self.wled_devices[self.cursor])
+        self.ask_confirm(
+            "Save WLED controller?",
+            [
+                self.pending_wled_device.get("name") or "WLED",
+                self.pending_wled_device.get("ip") or "Unknown IP",
+            ],
+            "save_wled_device",
+        )
+
+    def wled_state_object(self, result):
+        if isinstance(result, dict) and isinstance(result.get("state"), dict):
+            return result["state"]
+        return result if isinstance(result, dict) else {}
+
+    def perform_wled_request(self):
+        kind = self.wled_request_kind
+        args = self.wled_request_args or ()
+        if kind is None:
+            self.open_category("wled")
+            return
+        try:
+            client = self.ensure_wled()
+            if kind == "status":
+                ip_address = args[0]
+                info = client.probe(ip_address)
+                state = self.wled_state_object(client.get_state(ip_address))
+                power = "On" if state.get("on") else "Off"
+                brightness = int(state.get("bri", 0))
+                lines = [
+                    (info.get("name") or "WLED") + "  " + power,
+                    "IP: " + ip_address,
+                    "Version: " + str(info.get("version") or "Unknown"),
+                    "Brightness: %d%%" % ((brightness * 100) // 255),
+                ]
+                segments = state.get("seg") or []
+                if segments and isinstance(segments[0], dict):
+                    lines.append("Effect ID: " + str(segments[0].get("fx", 0)))
+                self.clear_wled_request()
+                self.show_details("WLED status", lines)
+                return
+            if kind == "save_device":
+                device = self.pending_wled_device or {}
+                ip_address = device.get("ip")
+                info = client.probe(ip_address)
+                if not self.save_updates({"WLED_IP": ip_address}, "WLED controller saved"):
+                    self.clear_wled_request()
+                    return
+                self.pending_wled_device = None
+                self.clear_wled_request()
+                self.open_category("wled")
+                self.flash("Saved " + str(info.get("name") or "WLED"), 3000)
+                return
+            if kind == "power":
+                ip_address = args[0]
+                toggle = getattr(client, "toggle_power", None)
+                if toggle is not None:
+                    result = toggle(ip_address)
+                else:
+                    current = self.wled_state_object(client.get_state(ip_address))
+                    result = client.set_power(ip_address, not bool(current.get("on")))
+                state = self.wled_state_object(result)
+                self.clear_wled_request()
+                self.open_category("wled")
+                self.flash("WLED " + ("on" if state.get("on", True) else "off"))
+                return
+            if kind == "color":
+                ip_address, red, green, blue = args
+                client.set_color(ip_address, red, green, blue)
+                self.clear_wled_request()
+                self.state = self.WLED_COLORS
+                self.flash("Color applied")
+                return
+            if kind == "rgb":
+                ip_address, red, green, blue = args
+                client.set_color(ip_address, red, green, blue)
+                self.clear_wled_request()
+                self.state = self.WLED_RGB
+                self.flash("RGB color applied")
+                return
+            if kind == "load_effects":
+                ip_address = args[0]
+                effects = client.get_effects(ip_address)
+                if not effects:
+                    raise RuntimeError("controller returned no usable effects")
+                self.wled_effects = effects
+                self.clear_wled_request()
+                self.state = self.WLED_EFFECTS
+                self.reset_list()
+                return
+            if kind == "effect":
+                ip_address, effect_id = args
+                client.set_effect(ip_address, effect_id)
+                self.clear_wled_request()
+                self.state = self.WLED_EFFECTS
+                self.flash("Effect applied")
+                return
+            if kind == "load_brightness":
+                ip_address = args[0]
+                state = self.wled_state_object(client.get_state(ip_address))
+                brightness = state.get("bri", 128)
+                if isinstance(brightness, int) and 1 <= brightness <= 255:
+                    self.wled_brightness = brightness
+                self.clear_wled_request()
+                self.state = self.WLED_BRIGHTNESS
+                return
+            if kind == "brightness":
+                ip_address, brightness = args
+                client.set_brightness(ip_address, brightness)
+                self.clear_wled_request()
+                self.state = self.WLED_BRIGHTNESS
+                self.flash("Brightness applied")
+                return
+            raise RuntimeError("unsupported WLED request")
+        except Exception as error:
+            self.clear_wled_request()
+            self.show_details(
+                "WLED request failed",
+                [_short_error(error), "Check power, IP and Wi-Fi"],
+            )
+
+    def open_wled_control(self, action):
+        ip_address = self.require_wled_network(require_ip=True)
+        if ip_address is None:
+            return
+        if action == "wled_status":
+            self.begin_wled_request("status", (ip_address,), "WLED status")
+        elif action == "wled_power":
+            self.begin_wled_request("power", (ip_address,), "WLED power", "Sending toggle")
+        elif action == "wled_colors":
+            self.state = self.WLED_COLORS
+            self.reset_list()
+        elif action == "wled_rgb":
+            self.state = self.WLED_RGB
+            self.wled_rgb_channel = 0
+        elif action == "wled_effects":
+            self.begin_wled_request("load_effects", (ip_address,), "WLED effects", "Loading effect list")
+        elif action == "wled_brightness":
+            self.begin_wled_request("load_brightness", (ip_address,), "WLED brightness", "Reading brightness")
+
     def open_action(self, action):
         if action == "status":
             self.wifi_status()
@@ -539,9 +844,19 @@ class BadgeSettingsApp:
         elif action == "weather_auto":
             self.ask_confirm("Use automatic weather?", ["Location will use IP"], "weather_auto")
         elif action == "wled_status":
-            self.show_details("WLED controller", [self.values.get("WLED_IP") or "Not configured", "Direct IPv4 only"])
+            self.open_wled_control(action)
+        elif action == "wled_scan":
+            self.begin_wled_scan()
         elif action == "wled_ip":
             self.begin_editor("setting", "WLED_IP", "WLED IPv4", self.values.get("WLED_IP") or "", 15)
+        elif action in (
+            "wled_power",
+            "wled_colors",
+            "wled_rgb",
+            "wled_effects",
+            "wled_brightness",
+        ):
+            self.open_wled_control(action)
         elif action == "clear_wled":
             self.ask_confirm("Clear WLED address?", ["WLED app becomes", "unconfigured"], "clear_wled")
         elif action == "ir_status":
@@ -560,6 +875,8 @@ class BadgeSettingsApp:
             rows = self.category_rows()
             self.move(len(rows))
             if io.BUTTON_A in io.pressed:
+                if self.category == "wled":
+                    self.release_wled_runtime()
                 self.state = self.ROOT
                 self.reset_list()
             elif io.BUTTON_B in io.pressed:
@@ -576,6 +893,8 @@ class BadgeSettingsApp:
             if io.BUTTON_A in io.pressed:
                 if self.confirm_action == "connect":
                     self.state = self.REVIEW
+                elif self.confirm_action == "save_wled_device":
+                    self.state = self.WLED_DEVICES
                 else:
                     self.open_category(self.category)
             elif io.BUTTON_B in io.pressed:
@@ -617,13 +936,113 @@ class BadgeSettingsApp:
                     self.start_pending_connection(save=self.save_on_connect)
             elif io.BUTTON_C in io.pressed and not self.result_success:
                 self.begin_editor("wifi_password", None, "Wi-Fi password", "", 64, True)
+        elif self.state == self.WLED_SCANNING:
+            if io.BUTTON_A in io.pressed:
+                self.stop_wled_scan(clear_results=False)
+                self.open_category("wled")
+            elif io.BUTTON_B in io.pressed and self.wled_devices:
+                self.stop_wled_scan(clear_results=False)
+                self.state = self.WLED_DEVICES
+                self.reset_list()
+        elif self.state == self.WLED_DEVICES:
+            self.move(len(self.wled_devices))
+            if io.BUTTON_A in io.pressed:
+                self.open_category("wled")
+            elif io.BUTTON_B in io.pressed:
+                self.choose_wled_device()
+            elif io.BUTTON_C in io.pressed:
+                self.begin_wled_scan()
+        elif self.state == self.WLED_COLORS:
+            self.move(len(WLED_COLOR_PRESETS))
+            if io.BUTTON_A in io.pressed:
+                self.open_category("wled")
+            elif io.BUTTON_B in io.pressed:
+                ip_address = self.require_wled_network(require_ip=True)
+                if ip_address is not None:
+                    unused_name, red, green, blue = WLED_COLOR_PRESETS[self.cursor]
+                    self.begin_wled_request(
+                        "color",
+                        (ip_address, red, green, blue),
+                        "WLED color",
+                        "Applying color",
+                    )
+        elif self.state == self.WLED_RGB:
+            if io.BUTTON_A in io.pressed:
+                self.open_category("wled")
+            elif io.BUTTON_C in io.pressed:
+                self.wled_rgb_channel = (self.wled_rgb_channel + 1) % 3
+            elif io.BUTTON_UP in io.pressed:
+                channel = self.wled_rgb_channel
+                self.wled_rgb[channel] = min(255, self.wled_rgb[channel] + 15)
+            elif io.BUTTON_DOWN in io.pressed:
+                channel = self.wled_rgb_channel
+                self.wled_rgb[channel] = max(0, self.wled_rgb[channel] - 15)
+            elif io.BUTTON_B in io.pressed:
+                ip_address = self.require_wled_network(require_ip=True)
+                if ip_address is not None:
+                    self.begin_wled_request(
+                        "rgb",
+                        (ip_address, self.wled_rgb[0], self.wled_rgb[1], self.wled_rgb[2]),
+                        "Custom RGB",
+                        "Applying RGB",
+                    )
+        elif self.state == self.WLED_EFFECTS:
+            self.move(len(self.wled_effects))
+            if io.BUTTON_A in io.pressed:
+                self.wled_effects = []
+                self.open_category("wled")
+                gc.collect()
+            elif io.BUTTON_B in io.pressed and self.wled_effects:
+                ip_address = self.require_wled_network(require_ip=True)
+                if ip_address is not None:
+                    effect_id, unused_name = self.wled_effects[self.cursor]
+                    self.begin_wled_request(
+                        "effect",
+                        (ip_address, effect_id),
+                        "WLED effect",
+                        "Applying effect",
+                    )
+            elif io.BUTTON_C in io.pressed:
+                ip_address = self.require_wled_network(require_ip=True)
+                if ip_address is not None:
+                    self.begin_wled_request(
+                        "load_effects",
+                        (ip_address,),
+                        "WLED effects",
+                        "Refreshing effects",
+                    )
+        elif self.state == self.WLED_BRIGHTNESS:
+            if io.BUTTON_A in io.pressed:
+                self.open_category("wled")
+            elif io.BUTTON_UP in io.pressed:
+                self.wled_brightness = min(255, self.wled_brightness + 15)
+            elif io.BUTTON_DOWN in io.pressed:
+                self.wled_brightness = max(1, self.wled_brightness - 15)
+            elif io.BUTTON_B in io.pressed:
+                ip_address = self.require_wled_network(require_ip=True)
+                if ip_address is not None:
+                    self.begin_wled_request(
+                        "brightness",
+                        (ip_address, self.wled_brightness),
+                        "WLED brightness",
+                        "Applying brightness",
+                    )
+        elif self.state == self.WLED_REQUEST:
+            if io.BUTTON_A in io.pressed:
+                self.clear_wled_request()
+                self.open_category("wled")
 
     def update(self):
         if self.state == self.SCANNING and _ticks_due(io.ticks, self.scan_due):
             self.perform_scan()
         if self.state == self.CONNECTING:
             self.poll_connection()
+        if self.state == self.WLED_SCANNING:
+            self.step_wled_scan()
         self.handle_input()
+        # Input gets the first chance to cancel a queued synchronous request.
+        if self.state == self.WLED_REQUEST and _ticks_due(io.ticks, self.wled_request_due):
+            self.perform_wled_request()
         self.draw()
 
     def fit_text(self, value, maximum_width):
@@ -756,6 +1175,77 @@ class BadgeSettingsApp:
             title = "Scan failed"
         self.draw_list(title, rows, "A Back   B Select   C Rescan")
 
+    def draw_wled_devices(self):
+        rows = [
+            (
+                item.get("name") or "WLED",
+                item.get("ip") or "?",
+            )
+            for item in self.wled_devices
+        ]
+        if not rows:
+            rows = [("No WLED found", "Use Edit IP")]
+        title = "WLED devices"
+        if self.scan_error:
+            title = "WLED scan ended"
+        self.draw_list(title, rows, "A Back  B Select  C Rescan")
+
+    def draw_wled_rgb(self):
+        self.draw_header("Custom RGB")
+        labels = ("Red", "Green", "Blue")
+        for index in range(3):
+            y = 24 + index * 18
+            selected = index == self.wled_rgb_channel
+            screen.brush = SELECTED if selected else TEXT
+            screen.text(("> " if selected else "  ") + labels[index], 8, y)
+            screen.text(str(self.wled_rgb[index]), 116, y)
+        screen.brush = brushes.color(
+            self.wled_rgb[0], self.wled_rgb[1], self.wled_rgb[2]
+        )
+        screen.draw(shapes.rectangle(54, 80, 52, 14))
+        self.draw_footer("A Back B Apply C Channel")
+
+    def draw_wled_brightness(self):
+        self.draw_header("WLED brightness")
+        percent = (self.wled_brightness * 100) // 255
+        screen.brush = TEXT
+        self.center_text(str(percent) + "%", 30)
+        screen.brush = MUTED
+        screen.draw(shapes.rectangle(20, 57, 120, 16))
+        screen.brush = SELECTED
+        width = max(1, (118 * self.wled_brightness) // 255)
+        screen.draw(shapes.rectangle(21, 58, width, 14))
+        screen.brush = TEXT
+        self.center_text("Value " + str(self.wled_brightness) + "/255", 82)
+        self.draw_footer("A Back  B Apply  UP/DOWN")
+
+    def draw_wled_effects(self):
+        """Draw only five effect rows so large controller lists do not churn heap."""
+
+        self.draw_header("WLED effects")
+        end = min(len(self.wled_effects), self.scroll + 5)
+        for index in range(self.scroll, end):
+            effect_id, name = self.wled_effects[index]
+            offset = index - self.scroll
+            y = 19 + offset * 16
+            selected = index == self.cursor
+            if selected:
+                screen.brush = SELECTED
+                screen.draw(shapes.rectangle(3, y, 154, 14))
+                screen.brush = INK
+            else:
+                screen.brush = TEXT
+            label = self.marquee_text(name, 116) if selected else self.fit_text(name, 116)
+            screen.text(label, 7, y + 2)
+            screen.text("#" + str(effect_id), 126, y + 2)
+        if self.scroll > 0:
+            screen.brush = MUTED
+            screen.text("^", 151, 18)
+        if self.scroll + 5 < len(self.wled_effects):
+            screen.brush = MUTED
+            screen.text("v", 151, 91)
+        self.draw_footer("A Back B Apply C Reload")
+
     def draw(self):
         screen.brush = BACKGROUND
         screen.clear()
@@ -793,6 +1283,41 @@ class BadgeSettingsApp:
                 lines.append("HOME reloads all apps")
             footer = "A Back   B Retry save" if self.result_save_failed else ("A Back   B Done" if self.result_success else "A Back B Retry C Edit")
             self.draw_details(title, lines, footer)
+        elif self.state == self.WLED_SCANNING:
+            scanner = self.wled_scanner
+            scanned = 0 if scanner is None else getattr(scanner, "scanned", 0)
+            total = 0 if scanner is None else getattr(scanner, "total", 0)
+            found = len(self.wled_devices)
+            self.draw_details(
+                "Scanning for WLED",
+                [
+                    "Same local network",
+                    "Checked: %d/%d" % (scanned, total),
+                    "Found: " + str(found),
+                    "Usually 30-40 seconds",
+                ],
+                "A Stop   B Results",
+            )
+        elif self.state == self.WLED_DEVICES:
+            self.draw_wled_devices()
+        elif self.state == self.WLED_COLORS:
+            rows = [
+                (item[0], "%d,%d,%d" % (item[1], item[2], item[3]))
+                for item in WLED_COLOR_PRESETS
+            ]
+            self.draw_list("WLED colors", rows, "A Back   B Apply")
+        elif self.state == self.WLED_RGB:
+            self.draw_wled_rgb()
+        elif self.state == self.WLED_EFFECTS:
+            self.draw_wled_effects()
+        elif self.state == self.WLED_BRIGHTNESS:
+            self.draw_wled_brightness()
+        elif self.state == self.WLED_REQUEST:
+            self.draw_details(
+                self.wled_request_title,
+                [self.wled_request_message, "Please wait..."],
+                "Request in progress",
+            )
 
         if self.flash_text and not _ticks_due(io.ticks, self.flash_until):
             screen.brush = WARNING
@@ -807,6 +1332,8 @@ class BadgeSettingsApp:
             except Exception:
                 pass
         self.wifi = None
+        self.release_wled_runtime()
+        self.wled_module = None
         self.clear_editor()
         self.pending_password = None
         self.pending_network = None

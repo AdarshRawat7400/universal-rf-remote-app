@@ -110,6 +110,77 @@ class FakeWLAN:
         raise ValueError(name)
 
 
+class FakeWLEDClient:
+    def __init__(self):
+        self.calls = []
+        self.fail_probe_ip = None
+        self.closed = False
+
+    def probe(self, ip_address, timeout=None, response_timeout=None):
+        self.calls.append(("probe", ip_address))
+        if ip_address == self.fail_probe_ip:
+            raise RuntimeError("not a WLED controller")
+        return {"ip": ip_address, "name": "Desk WLED", "version": "0.15.3"}
+
+    def get_state(self, ip_address):
+        self.calls.append(("state", ip_address))
+        return {"on": True, "bri": 128, "seg": [{"fx": 7}]}
+
+    def get_effects(self, ip_address):
+        self.calls.append(("effects", ip_address))
+        return [(0, "Solid"), (42, "Aurora")]
+
+    def toggle_power(self, ip_address):
+        self.calls.append(("toggle", ip_address))
+        return {"on": False}
+
+    def set_power(self, ip_address, enabled):
+        self.calls.append(("power", ip_address, enabled))
+        return {"on": bool(enabled)}
+
+    def set_color(self, ip_address, red, green, blue):
+        self.calls.append(("color", ip_address, red, green, blue))
+        return {"success": True}
+
+    def set_effect(self, ip_address, effect_id):
+        self.calls.append(("effect", ip_address, effect_id))
+        return {"success": True}
+
+    def set_brightness(self, ip_address, brightness):
+        self.calls.append(("brightness", ip_address, brightness))
+        return {"success": True}
+
+    def close(self):
+        self.closed = True
+
+
+class FakeWLEDScanner:
+    def __init__(self, client, wlan, saved_ip=None):
+        self.client = client
+        self.wlan = wlan
+        self.saved_ip = saved_ip
+        self.results = []
+        self.done = False
+        self.error = None
+        self.scanned = 0
+        self.total = 4
+        self.closed = False
+
+    def start(self):
+        return self
+
+    def step(self):
+        self.scanned = self.total
+        self.results = [
+            {"ip": "192.168.1.44", "name": "Desk WLED", "version": "0.15.3"}
+        ]
+        self.done = True
+        return True
+
+    def close(self):
+        self.closed = True
+
+
 class BadgeSettingsAppTests(unittest.TestCase):
     def setUp(self):
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -187,6 +258,96 @@ class BadgeSettingsAppTests(unittest.TestCase):
         rendered = repr(self.app.root_rows())
         self.assertNotIn("ghp_", rendered)
         self.assertNotIn("old-password", rendered)
+
+    def configure_wled_fakes(self):
+        client = FakeWLEDClient()
+        self.app.wled_module = types.SimpleNamespace(
+            WLEDClient=lambda timeout=1.2: client,
+            WLEDScanner=FakeWLEDScanner,
+        )
+        self.app.wled_client = client
+        self.wlan.connected = True
+        self.wlan.ip = "192.168.1.20"
+        self.wlan.ssid = "Home"
+        return client
+
+    def test_wled_category_has_discovery_and_full_controls(self):
+        self.app.open_category("wled")
+        actions = [row[1] for row in self.app.category_rows()]
+
+        for action in (
+            "wled_scan",
+            "wled_power",
+            "wled_colors",
+            "wled_rgb",
+            "wled_effects",
+            "wled_brightness",
+        ):
+            self.assertIn(action, actions)
+
+    def test_wled_scan_selection_is_reverified_before_atomic_save(self):
+        client = self.configure_wled_fakes()
+        self.app.open_category("wled")
+
+        self.app.begin_wled_scan()
+        self.assertEqual(self.app.WLED_SCANNING, self.app.state)
+        self.app.step_wled_scan()
+        self.assertEqual(self.app.WLED_DEVICES, self.app.state)
+        self.app.choose_wled_device()
+        self.assertEqual("save_wled_device", self.app.confirm_action)
+        self.app.run_confirmed_action()
+        self.assertEqual(self.app.WLED_REQUEST, self.app.state)
+        self.app.perform_wled_request()
+
+        self.assertIn(("probe", "192.168.1.44"), client.calls)
+        self.assertEqual("192.168.1.44", self.read_values()["WLED_IP"])
+        self.assertEqual(self.app.CATEGORY, self.app.state)
+
+    def test_failed_wled_verification_preserves_saved_ip(self):
+        client = self.configure_wled_fakes()
+        self.app.save_updates({"WLED_IP": "192.168.1.40"})
+        client.fail_probe_ip = "192.168.1.99"
+        self.app.pending_wled_device = {
+            "ip": "192.168.1.99",
+            "name": "Imposter",
+        }
+
+        self.app.begin_wled_request("save_device", ("192.168.1.99",))
+        self.app.perform_wled_request()
+
+        self.assertEqual("192.168.1.40", self.read_values()["WLED_IP"])
+        self.assertEqual(self.app.DETAILS, self.app.state)
+
+    def test_wled_color_and_dynamic_effect_id_are_sent_exactly(self):
+        client = self.configure_wled_fakes()
+        self.app.save_updates({"WLED_IP": "192.168.1.44"})
+
+        self.app.begin_wled_request(
+            "color", ("192.168.1.44", 12, 34, 56), "Color"
+        )
+        self.app.perform_wled_request()
+        self.app.wled_effects = [(42, "Aurora")]
+        self.app.state = self.app.WLED_EFFECTS
+        self.app.cursor = 0
+        self.io.pressed = {self.io.BUTTON_B}
+        self.app.handle_input()
+        self.io.pressed = set()
+        self.app.perform_wled_request()
+
+        self.assertIn(("color", "192.168.1.44", 12, 34, 56), client.calls)
+        self.assertIn(("effect", "192.168.1.44", 42), client.calls)
+
+    def test_wled_request_cancel_is_handled_before_network_dispatch(self):
+        client = self.configure_wled_fakes()
+        self.app.save_updates({"WLED_IP": "192.168.1.44"})
+        self.app.begin_wled_request("power", ("192.168.1.44",))
+        self.app.wled_request_due = 0
+        self.io.pressed = {self.io.BUTTON_A}
+
+        self.app.update()
+
+        self.assertEqual(self.app.CATEGORY, self.app.state)
+        self.assertNotIn(("toggle", "192.168.1.44"), client.calls)
 
     def test_secured_scan_opens_masked_password_editor(self):
         self.wlan.scan_results = [(b"Home", b"bssid", 6, -42, 3, 0)]
@@ -320,6 +481,11 @@ class BadgeSettingsAppTests(unittest.TestCase):
         self.app.pending_network = {"ssid": "Home"}
         self.app.pending_password = "top-secret"
         self.app.ensure_wifi().start_connect("Home", "top-secret", 0)
+        wled_client = FakeWLEDClient()
+        wled_scanner = FakeWLEDScanner(wled_client, self.wlan)
+        self.app.wled_client = wled_client
+        self.app.wled_scanner = wled_scanner
+        self.app.wled_effects = [(42, "Aurora")]
 
         self.app.on_exit()
 
@@ -327,6 +493,9 @@ class BadgeSettingsAppTests(unittest.TestCase):
         self.assertIsNone(self.app.editor)
         self.assertIsNone(self.app.pending_password)
         self.assertGreaterEqual(self.wlan.disconnect_calls, 2)
+        self.assertTrue(wled_client.closed)
+        self.assertTrue(wled_scanner.closed)
+        self.assertEqual([], self.app.wled_effects)
 
 
 if __name__ == "__main__":
