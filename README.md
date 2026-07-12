@@ -67,11 +67,24 @@ mounted `BADGER` volume, the runtime path is normally represented by
 
 ## Badge Settings app
 
-The `badge_settings` directory is a separate app; it does not overwrite the
-factory `wifi` status app. Install it by copying the whole directory to
-`BADGER:/apps/badge_settings`. If you use the optional launcher replacement,
-also copy the updated `extras/menu/__init__.py` to
-`BADGER:/apps/menu/__init__.py` so the launcher displays **Badge Settings**.
+The `badge_settings` source directory is a separate app; it does not overwrite
+the factory `wifi` status app. For the badge, install the memory-optimized
+bundle by copying the contents of `release/badge_settings` to
+`BADGER:/apps/badge_settings`. When upgrading an existing source installation,
+remove the five `badge_settings_*.py` implementation files from the destination;
+only `__init__.py`, `icon.png`, and the five `.mpy` files should remain. Do not
+leave matching `.py` and `.mpy` modules together because MicroPython will load
+and compile the source files, which can exhaust the badge heap during startup.
+
+The committed bundle targets the GitHub Universe 2025 Badge's tested MonaOS
+runtime: MicroPython 1.23.0, MPY ABI 6.3, and `armv7m`. If a future firmware
+changes that runtime, rebuild it with `tools/build_badge_settings_mpy.ps1` and a
+matching `mpy-cross` executable. The release manifest records source and
+artifact hashes so stale bytecode is caught by the test suite.
+
+If you use the optional launcher replacement, also copy the updated
+`extras/menu/__init__.py` to `BADGER:/apps/menu/__init__.py` so the launcher
+displays **Badge Settings**.
 
 The app has five categories with their own submenus:
 

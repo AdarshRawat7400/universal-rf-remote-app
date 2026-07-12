@@ -1,0 +1,61 @@
+﻿{
+    "schema_version":  1,
+    "application":  "badge_settings",
+    "target":  {
+                   "board":  "GitHub Universe 2025 Badge (RP2350)",
+                   "firmware":  "MonaOS",
+                   "micropython":  "1.23.0",
+                   "mpy_abi":  "6.3",
+                   "architecture":  "armv7m",
+                   "mpy_header_hex":  "4d06001f"
+               },
+    "compiler":  {
+                     "name":  "mpy-cross",
+                     "version":  "1.23.0",
+                     "command":  "mpy-cross -march=armv7m -s badge_settings/\u003cmodule\u003e.py -o release/badge_settings/\u003cmodule\u003e.mpy badge_settings/\u003cmodule\u003e.py"
+                 },
+    "files":  {
+                  "__init__.py":  {
+                                      "source":  "badge_settings/__init__.py",
+                                      "source_sha256":  "90c77a3fd542ca19962e2a5f9c918c893551188e047e31bdd9b52b4297bdf711",
+                                      "sha256":  "90c77a3fd542ca19962e2a5f9c918c893551188e047e31bdd9b52b4297bdf711",
+                                      "size":  2249
+                                  },
+                  "icon.png":  {
+                                   "source":  "badge_settings/icon.png",
+                                   "source_sha256":  "1f394d8ba23877eaf246c5958b997896104c4c00cff2af50f2a64fc0bd9f8cfd",
+                                   "sha256":  "1f394d8ba23877eaf246c5958b997896104c4c00cff2af50f2a64fc0bd9f8cfd",
+                                   "size":  1221
+                               },
+                  "badge_settings_app.mpy":  {
+                                                 "source":  "badge_settings/badge_settings_app.py",
+                                                 "source_sha256":  "da699e806468e285898315b88cbb5257466a8d61736407d8fd63d220f87b1a3a",
+                                                 "sha256":  "9bbcc919a066006aa6dd7827968b078b8c0b454e7f20694d4b65a70f5f3e52a3",
+                                                 "size":  21233
+                                             },
+                  "badge_settings_model.mpy":  {
+                                                   "source":  "badge_settings/badge_settings_model.py",
+                                                   "source_sha256":  "7c42678986a43fe8b1e85e594de892b721e1475d16e7e2f15a862180866994dd",
+                                                   "sha256":  "77645e5484d42e7ecec3482dbe7d4e2e237f509c00c911a272360f9cd5eec23f",
+                                                   "size":  8333
+                                               },
+                  "badge_settings_network.mpy":  {
+                                                     "source":  "badge_settings/badge_settings_network.py",
+                                                     "source_sha256":  "10e1dc4209e035128438c09ccf35f3d06d87dc7f9d21b92f27ba6cb06bb29970",
+                                                     "sha256":  "78d54c6540d4c8f3e653d11ba507f457e0c7b88a9973d910b2c39e420b563e5b",
+                                                     "size":  2029
+                                                 },
+                  "badge_settings_secrets.mpy":  {
+                                                     "source":  "badge_settings/badge_settings_secrets.py",
+                                                     "source_sha256":  "b3540faacbdb930c0c16ba4c2c69323c8c577440d674044084f66d30ab7cb5c0",
+                                                     "sha256":  "c8da593e980e1803cd410e1f48aa8cbe473793f6325a97bd4ae75a28a40afb33",
+                                                     "size":  10837
+                                                 },
+                  "badge_settings_wled.mpy":  {
+                                                  "source":  "badge_settings/badge_settings_wled.py",
+                                                  "source_sha256":  "95767c2a6ca91999a0a15232930407ff15b120a9780d509833f25aa90a11bb71",
+                                                  "sha256":  "01a9205c0012cdc5446f3a0f053697a9123e5fdb98188347390dcb917b43d3cd",
+                                                  "size":  8463
+                                              }
+              }
+}
