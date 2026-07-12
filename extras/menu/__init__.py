@@ -22,6 +22,7 @@ screen.font = PixelFont.load("/system/assets/fonts/ark.ppf")
 apps = []
 APP_DISPLAY_NAMES = {
     "universal_ir": "Universal IR",
+    "badge_settings": "Badge Settings",
     "monapet": "MonaPet",
 }
 try:

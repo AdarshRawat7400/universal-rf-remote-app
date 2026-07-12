@@ -33,6 +33,10 @@ profiles to an optional SQLite companion service.
   and store decoded Samsung commands without duplicating raw pulse arrays.
 - Optional file-based SQLite companion with profile backup/restore and a
   dependency-free local HTTP API.
+- Standalone **Badge Settings** app with nearby Wi-Fi selection plus nested
+  editors for GitHub identity/token, Weather location, WLED IPv4, and the IR
+  companion URL. Sensitive values remain masked and targeted saves preserve
+  every unrelated `secrets.py` setting.
 
 ## Install on the badge
 
@@ -57,6 +61,44 @@ and back up the badge's original `/system/apps/menu/__init__.py` first. On the
 mounted `BADGER` volume, the runtime path is normally represented by
 `BADGER:/apps/menu/__init__.py`. The upstream file and license are recorded in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Badge Settings app
+
+The `badge_settings` directory is a separate app; it does not overwrite the
+factory `wifi` status app. Install it by copying the whole directory to
+`BADGER:/apps/badge_settings`. If you use the optional launcher replacement,
+also copy the updated `extras/menu/__init__.py` to
+`BADGER:/apps/menu/__init__.py` so the launcher displays **Badge Settings**.
+
+The app has five categories with their own submenus:
+
+- **Wi-Fi**: status, scan/change network, connect saved, disconnect, and forget.
+- **GitHub**: update the user ID, replace the masked API token, or clear either.
+- **Weather**: set a city/location string or return to automatic IP location.
+- **WLED**: set or clear the direct controller IPv4 address.
+- **IR Companion**: set or clear the trusted-LAN companion-service URL.
+
+Wi-Fi scans retain only the strongest 16 bounded results. WPA/WPA2 networks are
+supported; WEP, WPA3, enterprise Wi-Fi, captive portals, and 5 GHz-only access
+points are not offered as connectable choices. Credentials are written only
+after the badge receives a valid DHCP address, so a wrong password never
+replaces the previous saved network.
+
+Text fields use a five-row carousel keyboard:
+
+- UP/DOWN changes the character group.
+- A/C moves left or right through that group.
+- B inserts the selected character or runs an action such as LEFT, RIGHT,
+  BACKSPACE, DELETE, CLEAR, DONE, or CANCEL.
+
+Passwords and tokens are never rendered as plaintext or included in errors.
+The app atomically updates only supported assignments in `/secrets.py`, checks
+the resulting Python syntax, preserves comments and unknown settings, and keeps
+a recoverable backup. Press HOME after saving to reset the badge so existing
+apps reload the new values.
+
+`/secrets.py` is still plaintext on the USB-accessible badge filesystem; this
+app improves safe editing and recovery, not credential-at-rest security.
 
 ## Controls
 
@@ -149,7 +191,8 @@ python -m unittest discover -s tests -v
 
 The suite covers codecs, learning, discovery, diagnostics, repeat scheduling,
 navigation, transactional badge storage, SQLite persistence, HTTP security
-boundaries, and companion sync. The official badge simulator is used for UI
+boundaries, companion sync, Wi-Fi state transitions, secret redaction, and
+atomic settings rollback. The official badge simulator is used for UI
 navigation and rendering; final PIO waveform and radio checks require the
 physical badge.
 
@@ -161,6 +204,10 @@ Christopher Parrott for Pimoroni Ltd.
 
 The optional launcher replacement is derived from the MIT-licensed
 [`badger/home` menu](https://github.com/badger/home/blob/4a3bf0395f79ae386a8d952f7da54281a2f00299/badge/apps/menu/__init__.py),
+copyright Pimoroni & GitHub.
+
+The Badge Settings icon is the MIT-licensed Wi-Fi icon from
+[`badger/home`](https://github.com/badger/home/blob/99f555209256dfe0e91fd62a699445942cb40838/badge/apps/wifi/icon.png),
 copyright Pimoroni & GitHub.
 
 The Samsung TV address/command mapping is cross-checked against the

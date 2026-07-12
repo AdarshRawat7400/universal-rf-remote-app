@@ -2,9 +2,9 @@
 
 ## badger/home
 
-Portions of the IR PIO implementation and the optional launcher replacement
-are derived from [badger/home](https://github.com/badger/home), licensed under
-the MIT License.
+Portions of the IR PIO implementation, the optional launcher replacement, and
+the Badge Settings Wi-Fi icon are derived from
+[badger/home](https://github.com/badger/home), licensed under the MIT License.
 
 MIT License
 
